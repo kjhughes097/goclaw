@@ -24,9 +24,15 @@ export interface MCPServerInput {
   args?: string[];
   url?: string;
   headers?: Record<string, string>;
+  env?: Record<string, string>;
   tool_prefix?: string;
   timeout_sec?: number;
   enabled?: boolean;
+}
+
+export interface MCPToolInfo {
+  name: string;
+  description?: string;
 }
 
 export interface MCPAgentGrant {

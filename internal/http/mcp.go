@@ -8,20 +8,27 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
+
+// MCPToolLister returns discovered tool names for a specific MCP server.
+type MCPToolLister interface {
+	ServerToolNames(serverName string) []string
+}
 
 // MCPHandler handles MCP server management HTTP endpoints.
 type MCPHandler struct {
 	store  store.MCPServerStore
 	token  string
 	msgBus *bus.MessageBus
+	mgr    MCPToolLister // optional, nil when Manager not available
 }
 
 // NewMCPHandler creates a handler for MCP server management endpoints.
-func NewMCPHandler(s store.MCPServerStore, token string, msgBus *bus.MessageBus) *MCPHandler {
-	return &MCPHandler{store: s, token: token, msgBus: msgBus}
+func NewMCPHandler(s store.MCPServerStore, token string, msgBus *bus.MessageBus, mgr MCPToolLister) *MCPHandler {
+	return &MCPHandler{store: s, token: token, msgBus: msgBus, mgr: mgr}
 }
 
 func (h *MCPHandler) emitCacheInvalidate() {
@@ -42,6 +49,12 @@ func (h *MCPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/mcp/servers/{id}", h.auth(h.handleGetServer))
 	mux.HandleFunc("PUT /v1/mcp/servers/{id}", h.auth(h.handleUpdateServer))
 	mux.HandleFunc("DELETE /v1/mcp/servers/{id}", h.auth(h.handleDeleteServer))
+
+	// Test connection (no save)
+	mux.HandleFunc("POST /v1/mcp/servers/test", h.auth(h.handleTestConnection))
+
+	// Server tools (runtime-discovered)
+	mux.HandleFunc("GET /v1/mcp/servers/{id}/tools", h.auth(h.handleListServerTools))
 
 	// Agent grants
 	mux.HandleFunc("GET /v1/mcp/servers/{id}/grants", h.auth(h.handleListServerGrants))
@@ -180,6 +193,89 @@ func (h *MCPHandler) handleDeleteServer(w http.ResponseWriter, r *http.Request) 
 
 	h.emitCacheInvalidate()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// --- Test connection ---
+
+func (h *MCPHandler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Transport string            `json:"transport"`
+		Command   string            `json:"command"`
+		Args      []string          `json:"args"`
+		URL       string            `json:"url"`
+		Headers   map[string]string `json:"headers"`
+		Env       map[string]string `json:"env"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if req.Transport == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "transport is required"})
+		return
+	}
+
+	tools, err := mcpbridge.DiscoverTools(r.Context(), req.Transport, req.Command, req.Args, req.Env, req.URL, req.Headers)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":    true,
+		"tool_count": len(tools),
+	})
+}
+
+// --- Server tools ---
+
+func (h *MCPHandler) handleListServerTools(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid server ID"})
+		return
+	}
+
+	srv, err := h.store.GetServer(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server not found"})
+		return
+	}
+
+	// Try runtime Manager first — returns names only (no descriptions available).
+	var tools []mcpbridge.ToolInfo
+	if h.mgr != nil {
+		if names := h.mgr.ServerToolNames(srv.Name); len(names) > 0 {
+			tools = make([]mcpbridge.ToolInfo, len(names))
+			for i, n := range names {
+				tools[i] = mcpbridge.ToolInfo{Name: n}
+			}
+		}
+	}
+
+	// Fallback: on-demand discovery (returns names + descriptions).
+	if len(tools) == 0 && srv.Transport != "" {
+		var args []string
+		var env, headers map[string]string
+		_ = json.Unmarshal(srv.Args, &args)
+		_ = json.Unmarshal(srv.Env, &env)
+		_ = json.Unmarshal(srv.Headers, &headers)
+
+		discovered, err := mcpbridge.DiscoverTools(r.Context(), srv.Transport, srv.Command, args, env, srv.URL, headers)
+		if err != nil {
+			slog.Warn("mcp.discover_tools", "server", srv.Name, "error", err)
+		} else {
+			tools = discovered
+		}
+	}
+
+	if tools == nil {
+		tools = []mcpbridge.ToolInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"tools": tools})
 }
 
 // --- Agent grants ---

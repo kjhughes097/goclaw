@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plug, Plus, RefreshCw, Pencil, Trash2, Users } from "lucide-react";
+import { Plug, Plus, RefreshCw, Pencil, Trash2, Users, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useMCP, type MCPServerData, type MCPServerInput } from "./hooks/use-mcp";
 import { MCPFormDialog } from "./mcp-form-dialog";
 import { MCPGrantsDialog } from "./mcp-grants-dialog";
+import { MCPToolsDialog } from "./mcp-tools-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
 import { useDeferredLoading } from "@/hooks/use-deferred-loading";
 import { usePagination } from "@/hooks/use-pagination";
@@ -22,13 +23,14 @@ const transportBadge: Record<string, string> = {
 };
 
 export function MCPPage() {
-  const { servers, loading, refresh, createServer, updateServer, deleteServer, grantAgent, revokeAgent, listAgentGrants } = useMCP();
+  const { servers, loading, refresh, createServer, updateServer, deleteServer, grantAgent, revokeAgent, listAgentGrants, testConnection, listServerTools } = useMCP();
   const spinning = useMinLoading(loading);
   const showSkeleton = useDeferredLoading(loading && servers.length === 0);
   const [search, setSearch] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editServer, setEditServer] = useState<MCPServerData | null>(null);
   const [grantsServer, setGrantsServer] = useState<MCPServerData | null>(null);
+  const [toolsServer, setToolsServer] = useState<MCPServerData | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MCPServerData | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
@@ -104,7 +106,7 @@ export function MCPPage() {
                 <tr className="border-b bg-muted/50">
                   <th className="px-4 py-3 text-left font-medium">Name</th>
                   <th className="px-4 py-3 text-left font-medium">Transport</th>
-                  <th className="px-4 py-3 text-left font-medium">Tool Prefix</th>
+                  <th className="px-4 py-3 text-center font-medium">Tools</th>
                   <th className="px-4 py-3 text-left font-medium">Enabled</th>
                   <th className="px-4 py-3 text-left font-medium">Created By</th>
                   <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -115,12 +117,17 @@ export function MCPPage() {
                   <tr key={srv.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <Plug className="h-4 w-4 text-muted-foreground" />
+                        <Plug className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                         <div>
-                          <span className="font-medium">{srv.display_name || srv.name}</span>
-                          {srv.display_name && (
-                            <span className="ml-1 text-xs text-muted-foreground">({srv.name})</span>
-                          )}
+                          <div>
+                            <span className="font-medium">{srv.display_name || srv.name}</span>
+                            {srv.display_name && (
+                              <span className="ml-1 text-xs text-muted-foreground">({srv.name})</span>
+                            )}
+                          </div>
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            {srv.tool_prefix || `mcp_${srv.name.replace(/-/g, "_")}`}
+                          </span>
                         </div>
                       </div>
                     </td>
@@ -129,8 +136,15 @@ export function MCPPage() {
                         {srv.transport}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                      {srv.tool_prefix || "-"}
+                    <td className="px-4 py-3 text-center">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setToolsServer(srv)}
+                        title="View tools"
+                      >
+                        <Wrench className="h-3.5 w-3.5" />
+                      </Button>
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={srv.enabled ? "default" : "secondary"}>
@@ -188,6 +202,7 @@ export function MCPPage() {
         onOpenChange={setFormOpen}
         server={editServer}
         onSubmit={editServer ? handleEdit : handleCreate}
+        onTest={testConnection}
       />
 
       {grantsServer && (
@@ -198,6 +213,16 @@ export function MCPPage() {
           onGrant={(agentId, allow, deny) => grantAgent(grantsServer.id, agentId, allow, deny)}
           onRevoke={(agentId) => revokeAgent(grantsServer.id, agentId)}
           onLoadGrants={listAgentGrants}
+          onLoadTools={listServerTools}
+        />
+      )}
+
+      {toolsServer && (
+        <MCPToolsDialog
+          open={!!toolsServer}
+          onOpenChange={(open) => !open && setToolsServer(null)}
+          server={toolsServer}
+          onLoadTools={listServerTools}
         />
       )}
 

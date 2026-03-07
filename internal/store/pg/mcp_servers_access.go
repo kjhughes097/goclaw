@@ -157,8 +157,8 @@ func (s *PGMCPServerStore) ListAccessible(ctx context.Context, agentID uuid.UUID
 		srv.URL = derefStr(url)
 		srv.ToolPrefix = derefStr(toolPrefix)
 		srv.Args = derefBytes(args)
-		srv.Headers = derefBytes(headers)
-		srv.Env = derefBytes(env)
+		srv.Headers = s.decryptJSONB(derefBytes(headers))
+		srv.Env = s.decryptJSONB(derefBytes(env))
 		if apiKey != nil && *apiKey != "" && s.encKey != "" {
 			if decrypted, err := crypto.Decrypt(*apiKey, s.encKey); err == nil {
 				srv.APIKey = decrypted

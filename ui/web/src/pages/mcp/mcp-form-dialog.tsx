@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -10,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { KeyValueEditor } from "@/components/shared/key-value-editor";
 import type { MCPServerData, MCPServerInput } from "./hooks/use-mcp";
 import { slugify, isValidSlug } from "@/lib/slug";
 
@@ -18,6 +20,7 @@ interface MCPFormDialogProps {
   onOpenChange: (open: boolean) => void;
   server?: MCPServerData | null;
   onSubmit: (data: MCPServerInput) => Promise<unknown>;
+  onTest: (data: { transport: string; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }) => Promise<{ success: boolean; tool_count?: number; error?: string }>;
 }
 
 const TRANSPORTS = [
@@ -26,18 +29,21 @@ const TRANSPORTS = [
   { value: "streamable-http", label: "Streamable HTTP" },
 ];
 
-export function MCPFormDialog({ open, onOpenChange, server, onSubmit }: MCPFormDialogProps) {
+export function MCPFormDialog({ open, onOpenChange, server, onSubmit, onTest }: MCPFormDialogProps) {
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [transport, setTransport] = useState("stdio");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [url, setUrl] = useState("");
-  const [headers, setHeaders] = useState("");
+  const [headers, setHeaders] = useState<Record<string, string>>({});
+  const [env, setEnv] = useState<Record<string, string>>({});
   const [toolPrefix, setToolPrefix] = useState("");
   const [timeout, setTimeout] = useState(60);
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; tool_count?: number; error?: string } | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -48,15 +54,56 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit }: MCPFormD
       setCommand(server?.command ?? "");
       setArgs(Array.isArray(server?.args) ? server.args.join(", ") : "");
       setUrl(server?.url ?? "");
-      setHeaders(server?.headers ? JSON.stringify(server.headers, null, 2) : "");
+      setHeaders(server?.headers ?? {});
+      setEnv(server?.env ?? {});
       setToolPrefix((server?.tool_prefix ?? "").replace(/^mcp_/, ""));
       setTimeout(server?.timeout_sec ?? 60);
       setEnabled(server?.enabled ?? true);
       setError("");
+      setTestResult(null);
     }
   }, [open, server]);
 
   const isStdio = transport === "stdio";
+
+  const buildConnectionData = () => {
+    const parsedArgs = isStdio && args.trim()
+      ? args.split(",").map((a) => a.trim()).filter(Boolean)
+      : undefined;
+    const parsedHeaders = !isStdio && Object.keys(headers).length > 0 ? headers : undefined;
+    const parsedEnv = Object.keys(env).length > 0 ? env : undefined;
+    return {
+      transport,
+      command: isStdio ? command.trim() : undefined,
+      args: parsedArgs,
+      url: !isStdio ? url.trim() : undefined,
+      headers: parsedHeaders,
+      env: parsedEnv,
+    };
+  };
+
+  const handleTest = async () => {
+    if (isStdio && !command.trim()) {
+      setError("Command is required for stdio transport");
+      return;
+    }
+    if (!isStdio && !url.trim()) {
+      setError("URL is required for SSE/HTTP transport");
+      return;
+    }
+
+    setTesting(true);
+    setError("");
+    setTestResult(null);
+    try {
+      const result = await onTest(buildConnectionData());
+      setTestResult(result);
+    } catch (err: unknown) {
+      setTestResult({ success: false, error: err instanceof Error ? err.message : "Connection failed" });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!name.trim() || !transport) {
@@ -76,31 +123,14 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit }: MCPFormD
       return;
     }
 
-    let parsedHeaders: Record<string, string> | undefined;
-    if (!isStdio && headers.trim()) {
-      try {
-        parsedHeaders = JSON.parse(headers);
-      } catch {
-        setError("Headers must be valid JSON object");
-        return;
-      }
-    }
-
-    const parsedArgs = isStdio && args.trim()
-      ? args.split(",").map((a) => a.trim()).filter(Boolean)
-      : undefined;
-
     setLoading(true);
     setError("");
     try {
+      const conn = buildConnectionData();
       await onSubmit({
         name: name.trim(),
         display_name: displayName.trim() || undefined,
-        transport,
-        command: isStdio ? command.trim() : undefined,
-        args: parsedArgs,
-        url: !isStdio ? url.trim() : undefined,
-        headers: parsedHeaders,
+        ...conn,
         tool_prefix: toolPrefix.trim() || undefined,
         timeout_sec: timeout,
         enabled,
@@ -115,12 +145,12 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit }: MCPFormD
 
   return (
     <Dialog open={open} onOpenChange={(v) => !loading && onOpenChange(v)}>
-      <DialogContent className="max-h-[85vh] flex flex-col">
+      <DialogContent className="max-h-[85vh] flex flex-col sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{server ? "Edit MCP Server" : "Add MCP Server"}</DialogTitle>
         </DialogHeader>
 
-        <div className="grid gap-4 py-2 overflow-y-auto min-h-0">
+        <div className="grid gap-4 py-2 px-0.5 -mx-0.5 overflow-y-auto min-h-0">
           <div className="grid gap-1.5">
             <Label htmlFor="mcp-name">Name *</Label>
             <Input id="mcp-name" value={name} onChange={(e) => setName(slugify(e.target.value))} placeholder="my-mcp-server" />
@@ -167,11 +197,28 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit }: MCPFormD
                 <Input id="mcp-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://localhost:3001/sse" className="font-mono text-sm" />
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="mcp-headers">Headers (JSON)</Label>
-                <Input id="mcp-headers" value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder='{"Authorization": "Bearer ..."}' className="font-mono text-sm" />
+                <Label>Headers</Label>
+                <KeyValueEditor
+                  value={headers}
+                  onChange={setHeaders}
+                  keyPlaceholder="Header name"
+                  valuePlaceholder="Header value"
+                  addLabel="Add Header"
+                />
               </div>
             </>
           )}
+
+          <div className="grid gap-1.5">
+            <Label>Environment Variables</Label>
+            <KeyValueEditor
+              value={env}
+              onChange={setEnv}
+              keyPlaceholder="Variable name"
+              valuePlaceholder="Value"
+              addLabel="Add Variable"
+            />
+          </div>
 
           <div className="grid gap-1.5">
             <Label htmlFor="mcp-prefix">Tool Prefix</Label>
@@ -194,11 +241,27 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit }: MCPFormD
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={loading}>
-            {loading ? "Saving..." : server ? "Update" : "Create"}
-          </Button>
+        <DialogFooter className="flex-col sm:flex-row gap-2">
+          <div className="flex items-center gap-2 mr-auto">
+            <Button type="button" variant="secondary" size="sm" onClick={handleTest} disabled={loading || testing}>
+              {testing ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Testing...</> : "Test Connection"}
+            </Button>
+            {testResult && (
+              <span className={`flex items-center gap-1 text-xs ${testResult.success ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
+                {testResult.success ? (
+                  <><CheckCircle2 className="h-3.5 w-3.5" /> {testResult.tool_count} tools found</>
+                ) : (
+                  <><XCircle className="h-3.5 w-3.5" /> {testResult.error}</>
+                )}
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={loading}>
+              {loading ? "Saving..." : server ? "Update" : "Create"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

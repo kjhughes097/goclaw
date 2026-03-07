@@ -3,9 +3,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp } from "@/hooks/use-ws";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/stores/use-toast-store";
-import type { MCPServerData, MCPServerInput, MCPAgentGrant } from "@/types/mcp";
+import type { MCPServerData, MCPServerInput, MCPAgentGrant, MCPToolInfo } from "@/types/mcp";
 
-export type { MCPServerData, MCPServerInput, MCPAgentGrant };
+export type { MCPServerData, MCPServerInput, MCPAgentGrant, MCPToolInfo };
 
 export function useMCP() {
   const http = useHttp();
@@ -101,6 +101,21 @@ export function useMCP() {
     [http],
   );
 
+  const testConnection = useCallback(
+    async (data: { transport: string; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }) => {
+      return http.post<{ success: boolean; tool_count?: number; error?: string }>("/v1/mcp/servers/test", data);
+    },
+    [http],
+  );
+
+  const listServerTools = useCallback(
+    async (serverId: string) => {
+      const res = await http.get<{ tools: MCPToolInfo[] }>(`/v1/mcp/servers/${serverId}/tools`);
+      return res.tools ?? [];
+    },
+    [http],
+  );
+
   return {
     servers,
     loading,
@@ -112,5 +127,7 @@ export function useMCP() {
     grantAgent,
     revokeAgent,
     listGrantsByAgent,
+    testConnection,
+    listServerTools,
   };
 }

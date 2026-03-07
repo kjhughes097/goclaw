@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -45,12 +46,14 @@ func (s *PGMCPServerStore) CreateServer(ctx context.Context, srv *store.MCPServe
 	now := time.Now()
 	srv.CreatedAt = now
 	srv.UpdatedAt = now
+	encHeaders := s.encryptJSONB(jsonOrEmpty(srv.Headers))
+	encEnv := s.encryptJSONB(jsonOrEmpty(srv.Env))
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO mcp_servers (id, name, display_name, transport, command, args, url, headers, env,
 		 api_key, tool_prefix, timeout_sec, settings, enabled, created_by, created_at, updated_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		srv.ID, srv.Name, nilStr(srv.DisplayName), srv.Transport, nilStr(srv.Command),
-		jsonOrEmpty(srv.Args), nilStr(srv.URL), jsonOrEmpty(srv.Headers), jsonOrEmpty(srv.Env),
+		jsonOrEmpty(srv.Args), nilStr(srv.URL), encHeaders, encEnv,
 		nilStr(apiKey), nilStr(srv.ToolPrefix), srv.TimeoutSec,
 		jsonOrEmpty(srv.Settings), srv.Enabled, srv.CreatedBy, now, now,
 	)
@@ -89,8 +92,8 @@ func (s *PGMCPServerStore) scanServer(row *sql.Row) (*store.MCPServerData, error
 	srv.URL = derefStr(url)
 	srv.ToolPrefix = derefStr(toolPrefix)
 	srv.Args = derefBytes(args)
-	srv.Headers = derefBytes(headers)
-	srv.Env = derefBytes(env)
+	srv.Headers = s.decryptJSONB(derefBytes(headers))
+	srv.Env = s.decryptJSONB(derefBytes(env))
 	if apiKey != nil && *apiKey != "" && s.encKey != "" {
 		decrypted, err := crypto.Decrypt(*apiKey, s.encKey)
 		if err != nil {
@@ -132,8 +135,8 @@ func (s *PGMCPServerStore) ListServers(ctx context.Context) ([]store.MCPServerDa
 		srv.URL = derefStr(url)
 		srv.ToolPrefix = derefStr(toolPrefix)
 		srv.Args = derefBytes(args)
-		srv.Headers = derefBytes(headers)
-		srv.Env = derefBytes(env)
+		srv.Headers = s.decryptJSONB(derefBytes(headers))
+		srv.Env = s.decryptJSONB(derefBytes(env))
 		if apiKey != nil && *apiKey != "" && s.encKey != "" {
 			if decrypted, err := crypto.Decrypt(*apiKey, s.encKey); err == nil {
 				srv.APIKey = decrypted
@@ -157,6 +160,14 @@ func (s *PGMCPServerStore) UpdateServer(ctx context.Context, id uuid.UUID, updat
 			updates["api_key"] = encrypted
 		}
 	}
+	// Encrypt env/headers JSONB fields
+	for _, field := range []string{"env", "headers"} {
+		if v, ok := updates[field]; ok {
+			if raw, isBytes := v.(json.RawMessage); isBytes {
+				updates[field] = json.RawMessage(s.encryptJSONB([]byte(raw)))
+			}
+		}
+	}
 	updates["updated_at"] = time.Now()
 	return execMapUpdate(ctx, s.db, "mcp_servers", id, updates)
 }
@@ -164,4 +175,38 @@ func (s *PGMCPServerStore) UpdateServer(ctx context.Context, id uuid.UUID, updat
 func (s *PGMCPServerStore) DeleteServer(ctx context.Context, id uuid.UUID) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM mcp_servers WHERE id = $1", id)
 	return err
+}
+
+// encryptJSONB encrypts a JSONB blob (env, headers) by converting it to a JSON string literal.
+// Unencrypted: {"key":"val"} (JSONB object). Encrypted: "aes-gcm:..." (JSONB string).
+func (s *PGMCPServerStore) encryptJSONB(data []byte) []byte {
+	if s.encKey == "" || len(data) == 0 || string(data) == "{}" || string(data) == "null" {
+		return data
+	}
+	enc, err := crypto.Encrypt(string(data), s.encKey)
+	if err != nil {
+		slog.Warn("mcp: failed to encrypt jsonb", "error", err)
+		return data
+	}
+	// Wrap as JSON string so it's valid JSONB
+	wrapped, _ := json.Marshal(enc)
+	return wrapped
+}
+
+// decryptJSONB decrypts a JSONB blob if it's an encrypted JSON string.
+// Returns the original bytes if unencrypted (JSON object) or on error.
+func (s *PGMCPServerStore) decryptJSONB(data []byte) []byte {
+	if s.encKey == "" || len(data) == 0 || data[0] != '"' {
+		return data // not a JSON string → unencrypted JSONB object
+	}
+	var encStr string
+	if json.Unmarshal(data, &encStr) != nil {
+		return data
+	}
+	dec, err := crypto.Decrypt(encStr, s.encKey)
+	if err != nil {
+		slog.Warn("mcp: failed to decrypt jsonb", "error", err)
+		return data
+	}
+	return []byte(dec)
 }
