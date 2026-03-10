@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Combobox } from "@/components/ui/combobox";
-import { X, Save, Check } from "lucide-react";
+import { X, Save, Check, Bell } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CHANNEL_TYPES } from "@/constants/channels";
 import type { TeamData, TeamAccessSettings } from "@/types/team";
@@ -183,21 +184,24 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
       {/* Notifications */}
       <div className="space-y-4">
         <h3 className="text-sm font-medium">{t("settings.notifications")}</h3>
-        <div className="rounded-lg border p-4">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={progressNotifications}
-              onChange={(e) => setProgressNotifications(e.target.checked)}
-              className="h-4 w-4 rounded border-input"
-            />
-            <div>
-              <span className="text-sm font-medium">{t("settings.progressNotifications")}</span>
-              <p className="text-xs text-muted-foreground">
+        <div className="rounded-lg border bg-gradient-to-r from-blue-500/5 to-purple-500/5 p-4">
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-blue-500/10 p-2.5 text-blue-600 dark:text-blue-400">
+              <Bell className="h-5 w-5" />
+            </div>
+            <div className="flex-1 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">{t("settings.progressNotifications")}</span>
+                <Switch
+                  checked={progressNotifications}
+                  onCheckedChange={setProgressNotifications}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
                 {t("settings.progressNotificationsHint")}
               </p>
             </div>
-          </label>
+          </div>
         </div>
       </div>
 
