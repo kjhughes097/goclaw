@@ -114,6 +114,16 @@ fi
 
 echo "Installing goclaw.service..."
 
+# systemd EnvironmentFile doesn't support 'export' prefixes — create a clean copy
+SYSTEMD_ENV_FILE=""
+if [[ -n "$ENV_FILE" ]]; then
+    SYSTEMD_ENV_FILE="/etc/goclaw/env"
+    mkdir -p /etc/goclaw
+    sed 's/^export //' "$ENV_FILE" > "$SYSTEMD_ENV_FILE"
+    chmod 600 "$SYSTEMD_ENV_FILE"
+    chown "$SERVICE_USER:$(id -gn "$SERVICE_USER")" "$SYSTEMD_ENV_FILE"
+fi
+
 cat > /etc/systemd/system/goclaw.service <<EOF
 [Unit]
 Description=GoClaw Gateway
@@ -125,7 +135,7 @@ Type=simple
 User=$SERVICE_USER
 Group=$(id -gn "$SERVICE_USER")
 WorkingDirectory=$PROJECT_DIR
-$(if [[ -n "$ENV_FILE" ]]; then echo "EnvironmentFile=$ENV_FILE"; fi)
+$(if [[ -n "$SYSTEMD_ENV_FILE" ]]; then echo "EnvironmentFile=$SYSTEMD_ENV_FILE"; fi)
 ExecStart=$BINARY
 Restart=on-failure
 RestartSec=5
