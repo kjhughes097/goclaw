@@ -10,7 +10,7 @@
 # Prerequisites:
 #   - Built binary (./goclaw) in project directory
 #   - .env.local or .env with required environment variables
-#   - For UI: pnpm, node, and nginx (brew install nginx)
+#   - For UI: node, npm, and nginx (brew install nginx)
 
 set -euo pipefail
 
@@ -69,8 +69,8 @@ else
 fi
 
 if $INSTALL_UI; then
-    if ! command -v pnpm &>/dev/null; then
-        echo "Error: pnpm not found. Install it or use --no-ui to skip the UI service."
+    if ! command -v npm &>/dev/null; then
+        echo "Error: npm not found. Install it or use --no-ui to skip the UI service."
         exit 1
     fi
     if ! command -v nginx &>/dev/null; then
@@ -110,7 +110,7 @@ UI_DIST="$PROJECT_DIR/ui/web/dist"
 
 if $INSTALL_UI; then
     echo "Building UI assets..."
-    (cd "$PROJECT_DIR/ui/web" && pnpm install --frozen-lockfile && pnpm build)
+    (cd "$PROJECT_DIR/ui/web" && npm ci && npm run build)
 
     if [[ ! -d "$UI_DIST" ]]; then
         echo "Error: UI build failed — dist/ not found."
