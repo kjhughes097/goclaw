@@ -89,7 +89,8 @@ systemctl stop goclaw-ui.service 2>/dev/null || true
 
 # ── Build UI assets ──────────────────────────────────────────────────────────
 
-UI_DIST="$PROJECT_DIR/ui/web/dist"
+UI_BUILD_DIR="$PROJECT_DIR/ui/web/dist"
+UI_DIST="/var/www/goclaw-ui"
 NGINX_CONF_DIR="/etc/nginx/sites-available"
 NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 
@@ -97,10 +98,16 @@ if $INSTALL_UI; then
     echo "Building UI assets..."
     sudo -u "$SERVICE_USER" bash -c "cd '$PROJECT_DIR/ui/web' && npm ci && npm run build"
 
-    if [[ ! -d "$UI_DIST" ]]; then
+    if [[ ! -d "$UI_BUILD_DIR" ]]; then
         echo "Error: UI build failed — dist/ not found."
         exit 1
     fi
+
+    # Copy to a location nginx can serve (avoids home directory permission issues)
+    echo "Copying UI assets to $UI_DIST..."
+    rm -rf "$UI_DIST"
+    cp -a "$UI_BUILD_DIR" "$UI_DIST"
+    chown -R www-data:www-data "$UI_DIST"
 fi
 
 # ── Generate gateway systemd unit ────────────────────────────────────────────
