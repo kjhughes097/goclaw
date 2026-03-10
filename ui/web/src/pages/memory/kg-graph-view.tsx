@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useCallback, useRef } from "react";
+import { useMemo, useEffect, useCallback } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -88,13 +88,9 @@ function buildGraph(entities: KGEntity[], relations: KGRelation[]) {
   return { nodes, edges };
 }
 
-function applyForceLayout(
-  nodes: Node[],
-  edges: Edge[],
-  onUpdate: (positioned: Node[]) => void,
-  onSettled?: () => void,
-) {
-  if (nodes.length === 0) return () => {};
+/** Run d3-force simulation synchronously and return final positions (no per-tick renders). */
+function computeForceLayout(nodes: Node[], edges: Edge[]): Node[] {
+  if (nodes.length === 0) return nodes;
 
   const simNodes: SimNode[] = nodes.map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
   const simLinks = edges.map((e) => ({ source: e.source, target: e.target }));
@@ -108,22 +104,17 @@ function applyForceLayout(
     .force("center", forceCenter(w / 2, h / 2))
     .force("x", forceX(w / 2).strength(0.05))
     .force("y", forceY(h / 2).strength(0.05))
-    .force("collide", forceCollide(55));
+    .force("collide", forceCollide(55))
+    .stop();
 
-  simulation.on("tick", () => {
-    const positioned = nodes.map((n, i) => ({
-      ...n,
-      position: { x: simNodes[i]!.x ?? 0, y: simNodes[i]!.y ?? 0 },
-    }));
-    onUpdate(positioned);
-  });
+  // Run simulation to completion synchronously (~300 ticks → 1 render instead of 300)
+  const ticks = Math.ceil(Math.log(simulation.alphaMin()) / Math.log(1 - simulation.alphaDecay()));
+  for (let i = 0; i < ticks; i++) simulation.tick();
 
-  simulation.on("end", () => onSettled?.());
-
-  // Run fast to settle
-  simulation.alpha(1).restart();
-
-  return () => simulation.stop();
+  return nodes.map((n, i) => ({
+    ...n,
+    position: { x: simNodes[i]!.x ?? 0, y: simNodes[i]!.y ?? 0 },
+  }));
 }
 
 interface KGGraphViewProps {
@@ -145,27 +136,21 @@ function KGGraphViewInner({ entities, relations, onEntityClick }: KGGraphViewPro
   const { fitView } = useReactFlow();
   const theme = useUiStore((s) => s.theme);
   const colorMode: ColorMode = theme === "system" ? "system" : theme;
-  const { nodes: initialNodes, edges: initialEdges } = useMemo(
-    () => buildGraph(entities, relations),
-    [entities, relations],
-  );
+  // Compute layout synchronously — no per-tick re-renders
+  const { layoutNodes, layoutEdges } = useMemo(() => {
+    const { nodes: rawNodes, edges: rawEdges } = buildGraph(entities, relations);
+    return { layoutNodes: computeForceLayout(rawNodes, rawEdges), layoutEdges: rawEdges };
+  }, [entities, relations]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-  const simRef = useRef<(() => void) | null>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState(layoutNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutEdges);
 
-  // Fit view after simulation settles so the graph covers the viewport
-  const handleSettled = useCallback(() => {
-    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 300 }));
-  }, [fitView]);
-
-  // Run force layout when data changes
+  // Sync when data changes
   useEffect(() => {
-    setEdges(initialEdges);
-    simRef.current?.();
-    simRef.current = applyForceLayout(initialNodes, initialEdges, setNodes, handleSettled);
-    return () => simRef.current?.();
-  }, [initialNodes, initialEdges, setNodes, setEdges, handleSettled]);
+    setNodes(layoutNodes);
+    setEdges(layoutEdges);
+    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 300 }));
+  }, [layoutNodes, layoutEdges, setNodes, setEdges, fitView]);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
